@@ -1,63 +1,134 @@
 import streamlit as st
 from openai import OpenAI
 
-# 앱 제목 및 설명 표시
-st.title("💬 챗봇")
-st.write(
-    "이 앱은 OpenAI의 GPT-3.5 모델을 사용하여 응답을 생성하는 간단한 챗봇입니다. "
-    "이 앱을 사용하려면 [여기](https://platform.openai.com/account/api-keys)에서 발급받은 OpenAI API 키가 필요합니다. "
-    "이 앱을 단계별로 구축하는 방법은 [튜토리얼](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)에서 확인하실 수 있습니다."
+# -----------------------------
+# 기본 설정
+# -----------------------------
+st.set_page_config(
+    page_title="여행 플래너 챗봇",
+    page_icon="✈️",
+    layout="centered"
 )
 
-# `st.text_input`을 통해 사용자로부터 OpenAI API 키를 입력받습니다.
-# 참고: API 키를 `./.streamlit/secrets.toml`에 저장하고 `st.secrets`를 통해 액세스할 수도 있습니다.
-# 상세 내용: https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API 키", type="password")
+st.title("✈️ 여행 플래너 챗봇")
+st.write(
+    "여행지 추천, 일정 구성, 맛집/카페 추천, 예산 계획, 준비물 체크리스트를 도와주는 여행용 챗봇입니다."
+)
+
+# -----------------------------
+# API 키 입력
+# -----------------------------
+openai_api_key = st.text_input("OpenAI API 키를 입력하세요", type="password")
+
 if not openai_api_key:
-    st.info("계속하려면 OpenAI API 키를 추가해 주세요.", icon="🗝️")
-else:
+    st.info("계속하려면 OpenAI API 키를 입력해 주세요.", icon="🗝️")
+    st.stop()
 
-    # OpenAI 클라이언트를 생성합니다.
-    client = OpenAI(api_key=openai_api_key)
+client = OpenAI(api_key=openai_api_key)
 
-    # 채팅 메시지를 저장하기 위한 세션 상태(session state) 변수를 생성합니다.
-    # 이를 통해 앱이 재실행되어도 대화 내용이 유지됩니다.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# -----------------------------
+# 사이드바: 여행 정보 입력
+# -----------------------------
+st.sidebar.header("🧳 여행 정보 설정")
 
-    # `st.chat_message`를 사용하여 기존의 채팅 메시지들을 화면에 표시합니다.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+destination = st.sidebar.text_input("여행지", placeholder="예: 오사카, 도쿄, 제주도, 파리")
+travel_days = st.sidebar.number_input("여행 기간", min_value=1, max_value=30, value=3)
+budget = st.sidebar.selectbox(
+    "예산",
+    ["저예산", "보통", "여유 있음", "럭셔리"]
+)
+travel_style = st.sidebar.multiselect(
+    "여행 스타일",
+    ["맛집", "카페", "쇼핑", "자연", "역사/문화", "액티비티", "휴식", "사진 명소", "덕질/서브컬처"],
+    default=["맛집", "카페"]
+)
+companion = st.sidebar.selectbox(
+    "동행 유형",
+    ["혼자", "친구와", "연인과", "가족과", "단체 여행"]
+)
 
-    # 사용자가 메시지를 입력할 수 있는 채팅 입력창을 생성합니다.
-    # 이 입력창은 자동으로 페이지 하단에 고정됩니다.
-    if prompt := st.chat_input("무엇이 궁금하신가요?"):
+st.sidebar.divider()
 
-        # 사용자가 입력한 메시지를 세션 상태에 저장하고 화면에 표시합니다.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+if st.sidebar.button("대화 초기화"):
+    st.session_state.messages = []
+    st.rerun()
 
-        # OpenAI API를 사용하여 응답을 생성합니다.
+# -----------------------------
+# 시스템 프롬프트
+# -----------------------------
+system_prompt = f"""
+너는 전문 여행 플래너 챗봇이다.
+
+사용자의 여행 정보를 바탕으로 현실적이고 구체적인 여행 조언을 제공한다.
+
+현재 사용자가 설정한 여행 정보:
+- 여행지: {destination if destination else "아직 정해지지 않음"}
+- 여행 기간: {travel_days}일
+- 예산: {budget}
+- 여행 스타일: {", ".join(travel_style) if travel_style else "아직 정해지지 않음"}
+- 동행 유형: {companion}
+
+답변 규칙:
+1. 사용자가 여행 일정을 요청하면 날짜별, 시간대별로 정리한다.
+2. 맛집이나 장소를 추천할 때는 왜 추천하는지 이유를 함께 설명한다.
+3. 예산이 중요해 보이면 교통비, 식비, 입장료, 쇼핑비를 나누어 설명한다.
+4. 이동 동선이 너무 비효율적이면 더 나은 순서를 제안한다.
+5. 사용자가 초보 여행자라면 준비물과 주의사항도 함께 알려준다.
+6. 실제 영업시간, 가격, 휴무일, 항공권 가격, 숙소 가격처럼 변동될 수 있는 정보는 반드시 확인이 필요하다고 말한다.
+7. 답변은 한국어로 한다.
+8. 너무 추상적으로 말하지 말고, 바로 여행 계획에 쓸 수 있게 구체적으로 답한다.
+"""
+
+# -----------------------------
+# 세션 상태 초기화
+# -----------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# -----------------------------
+# 기존 대화 출력
+# -----------------------------
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# -----------------------------
+# 사용자 입력
+# -----------------------------
+placeholder_text = "예: 오사카 3박 4일 일정 짜줘 / 도쿄 맛집 위주로 추천해줘 / 제주도 저예산 여행 계획 세워줘"
+
+if prompt := st.chat_input(placeholder_text):
+
+    # 사용자 메시지 저장 및 출력
+    st.session_state.messages.append({
+        "role": "user",
+        "content": prompt
+    })
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # OpenAI에 보낼 메시지 구성
+    messages_for_api = [
+        {"role": "system", "content": system_prompt},
+        *[
+            {"role": m["role"], "content": m["content"]}
+            for m in st.session_state.messages
+        ]
+    ]
+
+    # assistant 응답 생성
+    with st.chat_message("assistant"):
         stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
+            model="gpt-4o-mini",
+            messages=messages_for_api,
             stream=True,
         )
 
-        # 응답을 스트리밍 방식으로 화면에 표시하고 세션 상태에 저장합니다.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
-            stream=True,
-        )
+        response = st.write_stream(stream)
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    # assistant 응답 저장
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": response
+    })
